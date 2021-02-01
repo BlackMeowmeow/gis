@@ -1,0 +1,496 @@
+---
+title: "London House Price Analyse"
+output: html_document
+---
+Combined the factors which influenced by the epidemic and the various characteristics of each London boroughs, this study not only attempts to provide insight on the impact on house prices caused by the pandemic of the different London boroughs, but also shows the individuals’ changed demand for the house.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1.Library Packages
+
+Firstly, Let's library some packages which we will use in this work
+```{r library}
+library(tidyverse)
+library(janitor)
+library(plotly)
+library(maptools)
+library(RColorBrewer)
+library(classInt)
+library(sp)
+library(rgeos)
+library(tmap)
+library(tmaptools)
+library(sf)
+library(rgdal)
+library(geojsonio)
+library(tmaptools)
+library(ggplot2)
+library(corrplot)
+library(haven)
+library(texreg)
+library(dplyr) 
+library(tidyr)
+library(broom)
+library(MASS)
+library(car)
+library(ggplot2)
+library(GGally)
+library(spdep)
+library(sf)
+library(sp)
+library(lwgeom)
+library(spData)
+library(spatialreg)
+library(Matrix)
+library(spgwr)
+```
+
+## 2.Import Data 
+
+Now Let's import the data and have quick look of the data
+```{r import data}
+hpa <- read_csv("house_price_analyse.csv")
+
+head(hpa)
+
+hpa_num <- dplyr :: select_if(hpa, is.numeric)
+```
+
+Load London borough shape file
+```{r load London borough shape file}
+Londonborough <- st_read("ESRI/London_Borough_Excluding_MHW.shp") 
+        
+st_transform(Londonborough, 27700)
+
+Londonborough <- Londonborough[order(Londonborough$GSS_CODE), ]
+head(Londonborough)
+```
+
+## 3.Preliminary Analysis
+
+```{r summary the data}
+#summary the data
+summary(hpa)
+```
+
+plot the histgram of the house price year by year growth rate distribution
+```{r histgram of house price year by year growth}
+library(ggplot2)
+# set up the basic histogram
+gghist1 <- ggplot(hpa, 
+                 aes(x = year_by_year_growth)) + 
+  geom_histogram(color="black", 
+                 fill="white")+
+  labs(title="House Price Year by Year Growth Rate Distribution", 
+       x="house price year by year growth", 
+       y="Frequency")
+gghist1
+```
+
+```{r histgram of sqrt house price year by year growth}
+library(ggplot2)
+# set up the basic histogram
+gghist1 <- ggplot(hpa, 
+                 aes(x = sqrt(year_by_year_growth))) + 
+  geom_histogram(color="black", 
+                 fill="white")+
+  labs(title="House Price Year by Year Growth Rate Distribution", 
+       x="house price year by year growth", 
+       y="Frequency")
+gghist1
+```
+
+```{r histgram of log house price year by year growth}
+library(ggplot2)
+# set up the basic histogram
+gghist1 <- ggplot(hpa, 
+                 aes(x = log(year_by_year_growth))) + 
+  geom_histogram(color="black", 
+                 fill="white")+
+  labs(title="House Price Year by Year Growth Rate Distribution", 
+       x="house price year by year growth", 
+       y="Frequency")
+gghist1
+```
+
+map the house price year by year growth rate
+```{r map the house price growth rate}
+#merge boundaries and data
+hpa <- Londonborough%>%
+  left_join(.,
+            hpa, 
+            by = c("GSS_CODE" = "area_code"))
+
+hpa <- hpa[-1, ]
+```
+
+
+```{r map the data}
+#let's map our dependent variable to see if the join has worked:
+tmap_mode("view")
+qtm(hpa, 
+    fill = "year_by_year_growth", 
+    borders = "black",  
+    fill.palette = "Blues")
+```
+
+map the independent variables
+```{r map the independent variables}
+plot(hpa[10:15])
+```
+
+## 4. Explore the Correlation Between Datas
+
+plot the correlation between the features
+```{r plot the correlation between the features}
+#create a dadaframe of the numeric datas
+corrplot(cor(hpa_num))
+```
+
+ggpairs
+```{r ggpairs}
+ggpairs(hpa_num,axisLabels="none")
+```
+
+## 5. Build Linear Regression Models and Model Selection
+
+# 5.1 Train models with original data
+
+Build the models contains all the independent variables
+```{r linear regression model with all of the independent variables}
+lm.max <- lm(year_by_year_growth ~ ., data = hpa_num)
+summary(lm.max)
+```
+
+# 5.2 Variable selection
+Use Leaps to select the variables
+```{r leaps lm.max}
+library(leaps)
+
+regsubsets.out <- regsubsets( year_by_year_growth ~ .,
+                              data = hpa_num,
+                              nbest = 1,
+                              nvmax = NULL,
+                              force.in = NULL, force.out = NULL,
+                              method = 'exhaustive')
+summary(regsubsets.out)
+  
+as.data.frame(summary(regsubsets.out)$outmat)
+plot(regsubsets.out, scale='adjr2', main='Adjusted Rsq')
+```
+
+According to the results show above, "cases_per_1000000", "aver_num_of_open_space", and "still_eco_secure" are the top three variables which are more significant to the dependent variable. So let's build a model employed these tree variables and check the performance of the model.
+```{r build new model based on the results showed above}
+lm_sel <- lm(year_by_year_growth ~ cases_per_1000000 + aver_num_of_open_space + still_eco_secure, data = hpa_num)
+summary(lm_sel)
+```
+
+
+```{r create new dataframe}
+hpa_num <- hpa_num[,c(-2, -4, -7)]
+hpa <- hpa[,c(-10, -12, -15)]
+```
+
+
+# 5.3 Make sure the model meet the linear regression assumptions
+As we can see that the new model dose not perform so well. So our final selection is the lm_new.max.
+
+1.the residuals are normally distributed
+```{r plot the residuals}
+#save the residuals into the datafram
+lm_modeldata_new <- lm_sel %>%
+  augment(., hpa_num)
+
+#plot residuals
+lm_modeldata_new%>%
+dplyr::select(.resid)%>%
+  pull()%>%
+  qplot()+ 
+  geom_histogram() 
+```
+
+2.There is no multicolinearity among the independent variables
+```{r}
+vif(lm_sel)
+```
+
+3.Homoscedasticity
+plot the residuals against the predicted values.
+```{r}
+par(mfrow=c(2,2))    #plot to 2 by 2 array
+plot(lm_sel)
+```
+
+4. The residuals of the model are not correlated.(Check the standard autocorrelation)
+```{r}
+DW <- durbinWatsonTest(lm_sel)
+tidy(DW)
+```
+
+## 6.Spatial Autocorrelation
+
+create the new dataframe
+```{r add residual to the dataframe}
+#create a new data frame with the transformed data
+hpa$lm_resids = lm_sel$residuals
+```
+
+map the residuals
+```{r map the residuals}
+tmap_mode("view")
+qtm(hpa, 
+    fill = "lm_resids", 
+    borders = "black",  
+    fill.palette = "-RdBu")
+```
+
+
+```{r calculate the centroids of all Wards in London}
+#calculate the centroids of boroughs in London
+coordsB <- hpa%>%
+  st_centroid()%>%
+  st_geometry()
+plot(coordsB)
+```
+
+```{r generate weight matrix}
+#queen's case
+LB_nb <- hpa %>%
+  poly2nb(., queen=T)
+
+#nearest neighbours
+knn_B1 <-coordsB %>%
+  knearneigh(., k=3)
+knn_B2 <-coordsB %>%
+  knearneigh(., k=5)
+
+LB_knn3 <- knn_B1 %>%
+  knn2nb()
+LB_knn5 <- knn_B2 %>%
+  knn2nb()
+
+```
+
+```{r plot queen}
+#plot them
+plot(LB_nb, st_geometry(coordsB), col="red")
+```
+
+```{r plot knn3}
+plot(LB_knn3, st_geometry(coordsB), col="blue")
+```
+
+```{r plot knn5}
+plot(LB_knn5, st_geometry(coordsB), col="blue")
+```
+
+```{r create spatial weights matrices}
+#create a spatial weights matrix object from these weights
+LB_queens_weight <- LB_nb %>%
+  nb2listw(., style="C")
+
+LB.knn_3_weight <- LB_knn3 %>%
+  nb2listw(., style="C")
+
+LB.knn_5_weight <- LB_knn5 %>%
+  nb2listw(., style="C")
+```
+
+```{r}
+Queen <- hpa %>%
+  st_drop_geometry()%>%
+  dplyr::select(lm_resids)%>%
+  pull()%>%
+  moran.test(., LB_queens_weight)%>%
+  tidy()
+Queen
+```
+
+```{r moran test for knn3}
+Nearest_neighbour1 <- hpa %>%
+  st_drop_geometry()%>%
+  dplyr::select(lm_resids)%>%
+  pull()%>%
+  moran.test(., LB.knn_3_weight)%>%
+  tidy()
+Nearest_neighbour1
+```
+
+```{r moran test for knn5}
+Nearest_neighbour2 <- hpa %>%
+  st_drop_geometry()%>%
+  dplyr::select(lm_resids)%>%
+  pull()%>%
+  moran.test(., LB.knn_5_weight)%>%
+  tidy()
+Nearest_neighbour2
+```
+
+## 7.Spatial Regression Models
+
+# 7.1 SLM
+
+```{r slm_queen}
+slm_queen <- lagsarlm(year_by_year_growth ~ cases_per_1000000 +
+                        aver_num_of_open_space + still_eco_secure,
+               data = hpa, 
+               nb2listw(LB_nb, style="C"), 
+               method = "eigen")
+
+#what do the outputs show?
+summary(slm_queen)
+```
+
+```{r}
+hpa <- hpa %>%
+  mutate(slm_queen_resids = residuals(slm_queen))
+
+QueenMoran <- hpa %>%
+  st_drop_geometry()%>%
+  dplyr::select(slm_queen_resids)%>%
+  pull()%>%
+  moran.test(., LB_queens_weight)%>%
+  tidy()
+
+QueenMoran
+```
+
+# 7.2 SEM
+
+```{r SEM}
+sem_queen <- errorsarlm(year_by_year_growth ~ cases_per_1000000 +
+                        aver_num_of_open_space + still_eco_secure,
+               data = hpa, 
+               nb2listw(LB_nb, style="C"), 
+               method = "eigen")
+
+summary(sem_queen)
+```
+
+# 7.3 SDM
+```{r}
+queen.listw <- LB_queens_weight
+listw1 <-  queen.listw
+```
+
+# 7.4 Local Moran's I
+```{r local moran I of year by year house growth}
+localmi <- localmoran(hpa$year_by_year_growth, listw=listw1, alternative = "greater")
+localmi
+```
+
+```{r add local moran I into the dataframe}
+hpa$hpmi <- localmi[,1]
+```
+
+```{r plot the loca Moran I}
+tmap_mode("view")
+qtm(hpa, 
+    fill = "hpmi", 
+    borders = "black",  
+    fill.palette = "Blues")
+```
+
+#7.5 GWR
+```{r change the projector of hpa}
+st_crs(hpa) = 27700
+```
+
+```{r change hpa in to shape file}
+hpa <- hpa %>%
+  as(., "Spatial")
+```
+
+```{r change the projector of spatial weight matrix}
+st_crs(coordsB) = 2770
+```
+
+```{r change coordsB in to shape file}
+coordsBSP <- coordsB %>%
+  as(., "Spatial")
+```
+
+```{r calculate kernel bandwidth}
+GWRbandwidth <- gwr.sel(year_by_year_growth ~ cases_per_1000000 +
+                        aver_num_of_open_space + still_eco_secure,
+                        data = hpa,
+                        coords=coordsBSP,
+                        adapt=T)
+```
+
+build GWR model
+```{r build gwr model}
+gwr.model = gwr(year_by_year_growth ~ cases_per_1000000 +
+                        aver_num_of_open_space + still_eco_secure,
+                        data = hpa,
+                        coords=coordsBSP,
+                adapt=GWRbandwidth, 
+                hatmatrix=TRUE, 
+                se.fit=TRUE)
+gwr.model
+```
+
+analyse the results of GWR
+```{r create dataframe of gwr results}
+results <- as.data.frame(gwr.model$SDF)
+names(results)
+```
+
+```{r add coefficients to shape file}
+hpa_gwr <- hpa 
+hpa_gwr$coefcasesrate <- results$cases_per_1000000
+hpa_gwr$coefaveros <- results$aver_num_of_open_space
+hpa_gwr$coefeco <- results$still_eco_secure
+hpa_gwr$localr <- results$localR2
+```
+
+run significance test
+```{r significance test of "cases_per_1000000"}
+#run the significance test
+sigTest_cases = abs(gwr.model$SDF$"cases_per_1000000")-2 * gwr.model$SDF$"cases_per_1000000_se"
+
+#store significance results
+hpa_gwr$casesig = sigTest_cases
+```
+
+```{r significance test of "aver_num_of_open_space"}
+#run the significance test
+sigTest_aver = abs(gwr.model$SDF$"aver_num_of_open_space")-2 * gwr.model$SDF$"aver_num_of_open_space_se"
+
+
+#store significance results
+hpa_gwr$aversig = sigTest_aver
+```
+
+```{r significance test of "still_eco_secure"}
+#run the significance test
+sigTest_eco = abs(gwr.model$SDF$"still_eco_secure")-2 * gwr.model$SDF$"still_eco_secure_se"
+
+
+#store significance results
+hpa_gwr$ecosig = sigTest_eco
+```
+
+map the sdandard errors
+```{r map of "cases_per_1000000" standard errors}
+tm_shape(hpa_gwr) +
+  tm_polygons(col = "casesig", 
+              palette = "Blues",
+              alpha = 0.6)
+```
+
+```{r map of "aver_num_of_open_space" standard errors}
+tm_shape(hpa_gwr) +
+  tm_polygons(col = "aversig", 
+              palette = "Blues",
+              alpha = 0.6)
+```
+
+```{r map of "still_eco_secure" standard errors}
+tm_shape(hpa_gwr) +
+  tm_polygons(col = "ecosig", 
+              palette = "Reds", 
+              alpha = 0.6)
+```
+
